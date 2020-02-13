@@ -1,0 +1,56 @@
+
+[Below are the steps to be followed for fast and cost optimization sync form s3 to EFS, this is for the nexus3 data stored in s3 to use AWS EFS when running in Kubernetes.](#markdown-header-desc)
+## step 1:
+run s3contentslist.sh to get all the list of directories based on blob stores as input, once we get the list of all directories  and sub prefixes, we nned to copy them and paste into script to sync all the directories using GNU parallel.
+
+```Some or all of the parameters are empty
+
+Usage: ./s3contentslist.sh -a BLOBNAME1 -b BLOBNAME2 -c BLOBNAME3
+	 name of the  BLOB a
+	 name of the  BLOB b
+	 name of the  BLOB c
+	 try ./s3contentslist.sh -a rawtools-nexusblobs -b ditools-live-nexusnpm-10252019 -c ditools-live-nexus-10232019
+```
+
+
+
+
+## step2:
+Lauch c5.meatl spot instance for better performace (Researched and Tested), mount the AWS EFS as NFS, add nexus user and increse the linux file limits.
+
+```mkdir -p /nexus-data
+mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport fs-e522a064.efs.us-east-1.amazonaws.com:/ /nexus-data
+sysctl -w fs.file-max=500000
+groupadd -g 200 nexus
+useradd -u 200 -g 200 nexus
+vi /etc/security/limits.conf
+root root               hard    nofile          65535
+root root               soft    nofile          65535
+root root               hard    nproc           16384
+root root               soft    nproc           16384 
+```
+
+Once we have the list of volumes and chapters associated with the particular blob store run them in GNU parallel 1000 threads as shown below. **(Scripts are stored inside the same repo)**
+```nohup bash ditools-live-nexus-10232019.sh &
+nohup bash ditools-live-nexusnpm-10252019.sh &
+nohup bash rawtools-nexusblobs.sh &
+```
+
+## step3: 
+By now after step2 is completed, we should have all the data copied to EFS. This is the initial start, we have one copy of daya syned to EFS.
+
+## step4: 
+During the window time, we have to resync the data again to EFS from s3 but this time it should be incremental meaning only chnages made after the initial copy to EFS. **(Scripts are stored inside the same repo)**
+```nohup bash ditools-live-nexus-10232019-sync.sh &
+nohup bash ditools-live-nexusnpm-10252019-sync.sh &
+nohup bash rawtools-nexusblobs-sync.sh &
+```
+
+## step5: 
+Go inside each blob directory and run the folloiwng commands to resync the metadata properties for each blob store.
+```for d in *; do echo "$d";(rm -rf "$d" &) ; done;
+for i in `aws s3 ls  s3://developer-data-toolstsyspropenterprise-us-east-1-tsys//ditools-live-nexus-10232019/  | awk 'NR != 1'  | awk '{print $4}'`; do  aws s3 cp s3://developer-data-toolstsyspropenterprise-us-east-1-tsys//ditools-live-nexus-10232019/$i /nexus-data/ditools-live-nexus-10232019/ ; done
+for i in `aws s3 ls  s3://developer-data-toolstsyspropenterprise-us-east-1-tsys//rawtools-nexusblobs/  | awk 'NR != 1'  | awk '{print $4}'`; do  aws s3 cp s3://developer-data-toolstsyspropenterprise-us-east-1-tsys//rawtools-nexusblobs/$i /nexus-data/rawtools-nexusblobs/ ; done
+for i in `aws s3 ls  s3://developer-data-toolstsyspropenterprise-us-east-1-tsys//rawtools-nexusblobs/  | awk 'NR != 1'  | awk '{print $4}'`; do  aws s3 cp s3://developer-data-toolstsyspropenterprise-us-east-1-tsys//rawtools-nexusblobs/$i /nexus-data/rawtools-nexusblobs/ ; done
+```
+
